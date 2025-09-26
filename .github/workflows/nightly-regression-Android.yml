@@ -1,0 +1,169 @@
+name: Nightly Regression Tests - Android
+
+on:
+  schedule:
+#    - cron: '00 21 * * 0-5' # Monday to Friday at 21:00 UTC
+  workflow_dispatch:
+    inputs:
+      env:
+        description: 'Set the environment'
+        required: false
+        type: choice
+        default: automation
+        options:
+          - qa
+          - automation
+      thread_count:
+        description: 'Set the thread count'
+        required: false
+        type: choice
+        default: "3"
+        options:
+          - "1"
+          - "2"
+          - "3"
+      build_number:
+        description: 'build number (ex: 23466) or leave latest'
+        required: false
+        default: "latest"
+      tags:
+        description: 'Test tags'
+        required: false
+        default: "Test.Mobile.Regression"
+
+
+jobs:
+  build:
+    runs-on: mobileAppTesting
+    outputs:
+      test_status: ${{ steps.tests_result_status.outputs.test_status }}
+      build_id: ${{ steps.download_app.outputs.latest_build_id }}
+      env: ${{ steps.load_environment.outputs.ENV }}
+
+    steps:
+      - name: Load environment variables
+        id: load_environment
+        run: |
+          source ~/.zshrc
+          
+          # Set default values for scheduled runs, use inputs for manual runs or defaults if empty
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            ENV_VAL="automation"
+            THREAD_COUNT_VAL="3"
+            TAGS_VAL="Test.Mobile.Regression"
+            BUILD_NUMBER_VAL="latest"
+          else
+            ENV_VAL="${{ github.event.inputs.env || 'automation' }}"
+            THREAD_COUNT_VAL="${{ github.event.inputs.thread_count || '3' }}"
+            TAGS_VAL="${{ github.event.inputs.tags || 'Test.Mobile.Regression' }}"
+            BUILD_NUMBER_VAL="${{ github.event.inputs.build_number || 'latest' }}"
+          fi
+          
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
+          echo "PATH=$PATH" >> $GITHUB_ENV
+          echo "APPIUM_HOST=127.0.0.1" >> $GITHUB_ENV
+          echo "APPIUM_PORT=4723" >> $GITHUB_ENV
+          echo "BUILD_NUMBER=$BUILD_NUMBER_VAL" >> $GITHUB_ENV
+          echo "ENV=$ENV_VAL" >> $GITHUB_ENV
+          echo "ENV=$ENV_VAL" >> $GITHUB_OUTPUT
+          echo "COUNTRY=UZ" >> $GITHUB_ENV
+          echo "PLATFORM=android" >> $GITHUB_ENV
+          echo "THREAD_COUNT=$THREAD_COUNT_VAL" >> $GITHUB_ENV
+          echo "TEST_TAGS=$TAGS_VAL" >> $GITHUB_ENV
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Application
+        id: download_app
+        run: |
+          APK_URL="https://companytest.com/app/get/download.php?build_number=${{ env.BUILD_NUMBER }}&os=${{ env.PLATFORM }}&env=${{ env.ENV }}"
+
+          # Create the directory for the app file
+          APP_FOLDER="src/test/resources/app/${{ env.ENV }}/${{ env.COUNTRY }}"
+          mkdir -p "${APP_FOLDER}"
+          APP_PATH="${APP_FOLDER}/androidApp.apk"
+
+          # Make the request and extract data from the JSON response
+          DOWNLOAD_URL=$(curl -s "${APK_URL}" | jq -r '.url')
+          BUILD_NUMB=$(curl -s "${APK_URL}" | jq -r '.build_number')
+
+          if [ -n "${DOWNLOAD_URL}" ]; then
+            echo "Application Version: ${BUILD_NUMB}"
+            echo "Download URL: ${DOWNLOAD_URL}"
+            curl -L -v -o "${APP_PATH}" "${DOWNLOAD_URL}"
+
+            if [ -f "${APP_PATH}" ]; then
+              echo "Application file downloaded successfully to ${APP_PATH}"
+              echo "BUILD_NUMB=${BUILD_NUMB}" >> $GITHUB_ENV
+              echo "latest_build_id=${BUILD_NUMB}" >> $GITHUB_OUTPUT
+            else
+              echo "Failed to download application file."
+              exit 1
+            fi
+          else
+            echo "Failed to retrieve application download URL."
+            exit 1
+          fi
+
+      - name: Start Appium Server
+        run: appium -a ${{ env.APPIUM_HOST }} -p ${{ env.APPIUM_PORT }} | tee appium.log &
+
+      - name: Run Regression Tests
+        id: run_tests
+        run: |
+          mvn clean test -Dgroups="${{ env.TEST_TAGS }}" -DplatformName="${{ env.PLATFORM }}" -Dtarget="runner" -DthreadCount=${{ env.THREAD_COUNT }} -DbuildNumber=${{ env.BUILD_NUMB }} -Denv=${{ env.ENV }} -Dappium_host=${{ env.APPIUM_HOST }} -Dappium_port=${{ env.APPIUM_PORT }}
+
+      - name: Upload reports artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-${{ github.workflow }}-${{ github.run_id }}
+          path: reports/
+
+      - name: Upload logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.workflow }}-${{ github.run_id }}
+          path: logs/
+
+      - name: Upload Appium Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appium-log-${{ github.run_id }}
+          path: appium.log
+
+      - name: Cleanup temporary files
+        if: always()
+        run: |
+          echo "Cleaning up temporary files and directories..."
+          rm -rf reports/ logs/ videos/ target/ src/test/resources/app/ \${ctx:ROUTINGKEY}/
+          echo "Cleanup completed successfully"
+
+      - name: Set Test Status
+        id: tests_result_status
+        if: always()
+        run: |
+          if [ "${{ steps.run_tests.outcome }}" == "success" ]; then
+            echo "test_status=true" >> $GITHUB_OUTPUT
+          else
+            echo "test_status=false" >> $GITHUB_OUTPUT
+          fi
+
+  publish_report:
+    needs: build
+    if: always()
+    uses: Company/Appium.Mobile.E2E.Starter/.github/workflows/publish-report.yml@master
+    with:
+      env: ${{ needs.build.outputs.ENV }}
+      platformName: "android"
+      target: "runner"
+      threadCount: ${{ needs.build.outputs.thread_count || '3' }}
+      buildNumber: ${{ needs.build.outputs.build_id }}
+      callerWorkflow: ${{ github.workflow }}
+      author: ${{ github.actor }}
+      status: ${{ needs.build.outputs.test_status }}
+    secrets: inherit

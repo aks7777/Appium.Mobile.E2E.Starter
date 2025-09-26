@@ -1,0 +1,11 @@
+{
+  "loginTest": {
+    "username": "standard_user",
+    "password": "secret_sauce",
+    "productName": "Sauce Labs Bolt T-Shirt"
+  },
+  "tempLoginTest": {
+    "username": "1234522",
+    "password": "1211"
+  }
+}

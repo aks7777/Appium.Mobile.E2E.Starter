@@ -1,0 +1,97 @@
+name: pull-request
+
+on:
+  pull_request:
+    branches:
+#      - master
+
+
+jobs:
+  validate:
+    runs-on: mobileTesting
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Validate branch name
+      - name: Validate branch name
+        run: |
+          BRANCH_NAME=$(echo "${{ github.head_ref }}")
+          echo "Branch name: $BRANCH_NAME"
+          if [[ ! $BRANCH_NAME =~ ^(feature\/|fix\/|refactor\/)[a-zA-Z0-9_-]+$ ]]; then
+            echo "❌ Branch name does not follow the required pattern."
+            exit 1
+          fi
+
+      # Validate commit messages
+      - name: Validate commit messages
+        run: |
+          git fetch --all --unshallow
+          
+          # Define base and head refs
+          BASE_REF="origin/${{ github.base_ref }}"
+          HEAD_REF="origin/${{ github.head_ref }}"
+          
+          # Validate commit messages in the range
+          git log $BASE_REF..$HEAD_REF --pretty=format:"%s" | while read -r COMMIT_MSG; do
+            echo "Validating commit message: $COMMIT_MSG"
+            
+            # Skip auto-generated merge commits
+            if [[ $COMMIT_MSG == Merge* ]]; then
+              echo "ℹ️ Skipping auto-generated merge commit: $COMMIT_MSG"
+              continue
+            fi
+      
+            # Validate commit message pattern
+            if [[ ! $COMMIT_MSG =~ ^(test|fix|refactor|chore|docs|feature):.+$ ]]; then
+              echo "❌ Commit message '$COMMIT_MSG' does not follow the required pattern."
+              exit 1
+            fi
+          done
+
+
+
+  build:
+    runs-on: mobileAppTesting
+    steps:
+      - name: Load environment variables
+        id: load_environment
+        run: |
+          source ~/.zshrc
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
+          echo "PATH=$PATH" >> $GITHUB_ENV
+
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      - name: check if code is builded
+        id: run_tests
+        run: |
+            echo "Executing mvn clean install -DskipTests"
+            mvn clean install -DskipTests
+        
+
+      - name: Run TagExtractor and save output
+        id: run-tag-extractor
+        run: |
+          mvn --quiet compile exec:exec -Dexec.executable="java" -Dexec.args="-cp target/classes company.utils.TagExtractor"
+          cat test-groups.txt
+
+
+      - name: Clone Wiki repository
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          git clone https://$GH_TOKEN@github.com/<Company>/Appium.Mobile.E2E.Starter.wiki.git
+          cd Appium.Mobile.E2E.Starter.wiki
+          mv ../test-groups.txt Home.md
+          git add Home.md
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "Update Home page with latest test groups"
+            git push
+          else
+            echo "No changes to commit"
+          fi

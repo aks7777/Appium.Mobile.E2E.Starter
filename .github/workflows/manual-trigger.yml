@@ -1,0 +1,204 @@
+name: Execute test manually
+
+on:
+  workflow_dispatch:
+    inputs:
+      thread_count:
+        description: 'Set the thread count'
+        required: true
+        type: choice
+        options:
+          - 1
+          - 2
+          - 3
+      platformName:
+        description: 'Set the platform Name'
+        required: true
+        type: choice
+        default: "android"
+        options:
+          - android
+          - ios
+      target:
+        description: 'Set the target'
+        required: true
+        type: choice
+        default: "runner"
+        options:
+          - runner
+          - browserstack
+      country:
+        description: 'Set the country'
+        required: true
+        type: choice
+        options:
+          - UZ
+      tags:
+        description: 'Tags'
+        required: true
+        default: "Identity.loginAppTest"
+      env:
+        description: 'Set the environment'
+        required: true
+        type: choice
+        default: automation
+        options:
+          - automation
+          - qa
+      build_number:
+        description: 'build number (ex: 23466) or leave latest'
+        required: true
+        default: "latest"
+      publish_report:
+        description: 'Do you want to publish the report?'
+        required: true
+        type: boolean
+        default: true
+
+  
+jobs:
+  build:
+    runs-on: mobileAppTesting
+    outputs:
+      test_status: ${{ steps.tests_result_status.outputs.test_status }}
+      build_id: ${{ steps.download_app.outputs.latest_build_id }}
+      env:  ${{ steps.load_environment.outputs.ENV }}
+
+    steps:
+      - name: Load environment variables
+        id: load_environment
+        run: |
+          source ~/.zshrc
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
+          echo "PATH=$PATH" >> $GITHUB_ENV
+          echo "APPIUM_HOST=127.0.0.1" >> $GITHUB_ENV
+          echo "APPIUM_PORT=4723" >> $GITHUB_ENV
+          echo "BUILD_NUMBER=${{ github.event.inputs.build_number }}" >> $GITHUB_ENV
+          echo "ENV=${{ github.event.inputs.env }}" >> $GITHUB_ENV
+          echo "ENV=${{ github.event.inputs.env }}" >> $GITHUB_OUTPUT
+          echo "COUNTRY=${{ github.event.inputs.country }}" >> $GITHUB_ENV
+          echo "OS=${{ github.event.inputs.platformName }}" >> $GITHUB_ENV
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Download the APK file
+      - name: Download Application in background
+        id: download_app
+        run: |
+          APK_URL="https://<companytesting>.com/app/get/download.php?build_number=${{ env.BUILD_NUMBER }}&os=${{ env.OS }}&env=${{ env.ENV }}"
+
+          # Create the directory for the app file
+          APP_FOLDER="src/test/resources/app/${{ env.ENV }}/${{ env.COUNTRY }}"
+          mkdir -p "${APP_FOLDER}"
+
+          # Set the file path and name based on platform
+          if [ "${{ env.OS }}" = "ios" ]; then
+            APP_PATH="${APP_FOLDER}/iosApp.zip"
+            EXTRACTED_APP_PATH="${APP_FOLDER}/iosApp.app"
+          else
+            APP_PATH="${APP_FOLDER}/androidApp.apk"
+          fi
+
+          # Make the request and extract data from the JSON response
+          DOWNLOAD_URL=$(curl -s "${APK_URL}" | jq -r '.url')
+          BUILD_NUMB=$(curl -s "${APK_URL}" | jq -r '.build_number')
+
+          if [ -n "${DOWNLOAD_URL}" ]; then
+            echo "Application Version: ${BUILD_NUMB}"
+            echo "Download URL: ${DOWNLOAD_URL}"
+            curl -L -v -o "${APP_PATH}" "${DOWNLOAD_URL}"
+
+            if [ -f "${APP_PATH}" ]; then
+              echo "Application file downloaded successfully to ${APP_PATH}"
+              echo "BUILD_NUMB=${BUILD_NUMB}" >> $GITHUB_ENV  # Export BUILD_NUMB to the environment file
+              echo "latest_build_id=${BUILD_NUMB}" >> $GITHUB_OUTPUT
+
+              # If the platform is iOS, unzip the file
+              if [ "${{ github.event.inputs.platformName }}" = "ios" ]; then
+                unzip -o "${APP_PATH}" -d "${APP_FOLDER}" && mv "${APP_FOLDER}"/*.app "${EXTRACTED_APP_PATH}"
+
+                if [ -d "${EXTRACTED_APP_PATH}" ]; then
+                  echo "iOS app extracted successfully to ${EXTRACTED_APP_PATH}"
+                else
+                  echo "Failed to extract iOS app."
+                  exit 1
+                fi
+              fi
+            else
+              echo "Failed to download application file."
+              exit 1
+            fi
+          else
+            echo "Failed to retrieve application download URL."
+            exit 1
+          fi
+
+      - name: Start Appium Server
+        run: appium -a ${{ env.APPIUM_HOST }} -p ${{ env.APPIUM_PORT }} | tee appium.log &
+
+      - name: Prepare Tags with Prefix
+        run: |
+          TAGS=$(echo "${{ github.event.inputs.tags }}" | sed 's/[^,]*/Test.Mobile.&/g')
+          echo "tags_with_prefix=$TAGS" >> $GITHUB_ENV
+
+      - name: Run Tests
+        id: run_tests
+        run: |
+              mvn clean test -Dgroups="${{ env.tags_with_prefix }}" -DplatformName="${{ env.OS }}" -Dtarget="${{ github.event.inputs.target }}" -DthreadCount=${{ github.event.inputs.thread_count }}  -DbuildNumber=${{ env.BUILD_NUMB }} -Denv=${{ env.ENV }} -Dappium_host=${{ env.APPIUM_HOST }} -Dappium_port=${{ env.APPIUM_PORT }}
+
+
+      - name: Upload reports artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-${{ github.workflow }}-${{ github.run_id }}
+          path: reports/
+
+      - name: Upload logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.workflow }}-${{ github.run_id }}
+          path: logs/
+
+      - name: Upload Appium Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appium-log-${{ github.run_id }}
+          path: appium.log
+
+      - name: Cleanup temporary files
+        if: always()
+        run: |
+          echo "Cleaning up temporary files and directories..."
+          rm -rf reports/ logs/ videos/ target/ src/test/resources/app/ \${ctx:ROUTINGKEY}/
+          echo "Cleanup completed successfully"
+
+          
+      - name: Set Test Status
+        id: tests_result_status
+        if: always()
+        run: |
+          if [ "${{ steps.run_tests.outcome }}" == "success" ]; then
+            echo "test_status=true" >> $GITHUB_OUTPUT
+          else
+            echo "test_status=false" >> $GITHUB_OUTPUT
+          fi
+
+  publish_report:
+    needs: build
+    if: ${{ github.event.inputs.publish_report == 'true' && always() }}
+    uses: Company/Appium.Mobile.E2E.Starter/.github/workflows/publish-report.yml@master
+    with:
+      env: ${{ needs.build.outputs.ENV }}
+      platformName: ${{ github.event.inputs.platformName }}
+      target: ${{ github.event.inputs.target }}
+      threadCount: ${{ github.event.inputs.thread_count }}
+      buildNumber: ${{ needs.build.outputs.build_id }}
+      callerWorkflow: ${{ github.workflow }}
+      author: ${{ github.actor }}
+      status: ${{ needs.build.outputs.test_status }}
+    secrets: inherit

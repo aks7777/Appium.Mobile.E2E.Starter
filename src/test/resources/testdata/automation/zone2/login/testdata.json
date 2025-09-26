@@ -1,0 +1,14 @@
+{
+  "loginTest": {
+    "username": "123456",
+    "password": "1212",
+    "smscode": "",
+    "isVerified": "yes"
+  },
+  "tempLoginTest": {
+    "username": "1234522",
+    "password": "1211",
+    "smscode": "",
+    "isVerified": "yes"
+  }
+}
