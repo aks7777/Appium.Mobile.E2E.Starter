@@ -477,4 +477,66 @@ public class BasePage {
             }
         }
     }
+
+    /**
+     /**
+     * This method is used to check if the given element is disabled.
+     * @param element This is the element to check.
+     * @return Boolean This returns whether the element is disabled.
+     */
+    public Boolean isElementDisabled(WebElement element) {
+        waitForVisibility(element);
+        try{
+            return !element.isEnabled();
+        }
+        catch (Exception e){
+            LoggerUtilities.error("Element is not disabled : " + Arrays.toString(e.getStackTrace()));
+            return false;
+        }
+    }
+
+    /**
+     * This method is used to waitInSeconds for the given element to be visible.
+     *
+     * @param element This is the element to waitInSeconds for.
+     * @param time   This is the duration to waitInSeconds.
+     */
+    public void waitForVisibility(WebElement element, Duration time) {
+        WebDriverWait wait = new WebDriverWait(getDriver(), time);
+        wait.until(ExpectedConditions.visibilityOf(element));
+    }
+
+    /**
+     * This method is used to waitInSeconds for the given element to be invisible.
+     * @param element This is the element to waitInSeconds for.
+     */
+    public void waitForInvisibility(WebElement element) {
+        Duration time = Duration.ofSeconds(Long.parseLong(ReadProperties.getValue("wait")));
+        try{
+            WebDriverWait wait = new WebDriverWait(getDriver(), time);
+            wait.until(ExpectedConditions.invisibilityOf(element));
+        } catch (Exception e) {
+            LoggerUtilities.error("Error in Wait For Invisibility : " + element + " after " + time + " secs.");
+        }
+    }
+
+    /**
+     * This method is used to click on the given element.
+     *
+     * @param element This is the element to click on.
+     * @param message This is the message to log.
+     * @param timeoutInSeconds This is the timeout in seconds to waitInSeconds for visibility.
+     */
+    public void click(WebElement element, String message, int timeoutInSeconds) {
+        Duration time = Duration.ofSeconds(timeoutInSeconds);
+        waitForVisibility(element, time);
+        element.click();
+        LoggerUtilities.infoLoggerInFileAndReport("Clicked on " + message);
+    }
+
+    public WebElement explicitWaitForVisibilityByLocator(By locator) {
+        long waitSeconds = Long.parseLong(ReadProperties.getValue("wait"));
+        WebDriverWait wait = new WebDriverWait(getDriver(), Duration.ofSeconds(waitSeconds));
+        return wait.until(ExpectedConditions.visibilityOfElementLocated(locator));
+    }
 }
